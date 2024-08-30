@@ -57,6 +57,15 @@ func WithHeaders(headers map[string]string) DownloadOpt {
 	}
 }
 
+type ProgressFunc func(currentLength uint64, totalLength uint64)
+
+func WithProgressFunc(progressFunc ProgressFunc, interval time.Duration) DownloadOpt {
+	return func(d *downloader) {
+		d.progressFunc = progressFunc
+		d.progressInterval = interval
+	}
+}
+
 func WithRetryParameters(params RetryParameters) DownloadOpt {
 	return func(d *downloader) {
 		d.retryParameters = params
@@ -111,12 +120,27 @@ type downloader struct {
 	retryParameters RetryParameters
 
 	// these fields are used by option functions
-	tmpWriter  io.Writer
-	finalFuncs []func() error
-	headers    map[string]string
+	tmpWriter        io.Writer
+	finalFuncs       []func() error
+	headers          map[string]string
+	progressFunc     ProgressFunc
+	progressInterval time.Duration
 
 	// these fields are updated at runtime
 	contentLength int64
+}
+
+func (d *downloader) progressReportLoop(ctx context.Context) {
+	t := time.NewTicker(d.progressInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			d.progressFunc(d.writer.Count(), uint64(d.contentLength))
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (d *downloader) runInner(ctx context.Context) (io.ReadCloser, error) {
@@ -182,6 +206,11 @@ func (d *downloader) runInner(ctx context.Context) (io.ReadCloser, error) {
 }
 
 func (d *downloader) run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if d.progressFunc != nil {
+		go d.progressReportLoop(ctx)
+	}
 	for {
 		body, err := d.runInner(ctx)
 		if err != nil {
