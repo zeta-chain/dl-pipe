@@ -12,7 +12,9 @@ import (
 	"hash"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/dustin/go-humanize"
 	dlpipe "github.com/zeta-chain/dl-pipe"
 )
 
@@ -65,11 +67,38 @@ func getHashOpt(hashArg string) dlpipe.DownloadOpt {
 	return dlpipe.WithExpectedHash(hasher, hashBytes)
 }
 
+const progressFuncInterval = time.Second * 10
+
+func getProgressFunc() dlpipe.ProgressFunc {
+	prevLength := uint64(0)
+	return func(currentLength uint64, totalLength uint64) {
+		currentLengthStr := humanize.Bytes(currentLength)
+		totalLengthStr := humanize.Bytes(totalLength)
+
+		rate := float64(currentLength-prevLength) / progressFuncInterval.Seconds()
+		rateStr := humanize.Bytes(uint64(rate))
+		prevLength = currentLength
+
+		percent := float64(currentLength) / float64(totalLength) * 100
+
+		fmt.Fprintf(os.Stderr, "Downloaded %s of %s (%.1f%%) at %s/s\n", currentLengthStr, totalLengthStr, percent, rateStr)
+	}
+}
+
+func getProgressOpt(progress bool) dlpipe.DownloadOpt {
+	if !progress {
+		return nil
+	}
+	return dlpipe.WithProgressFunc(getProgressFunc(), progressFuncInterval)
+}
+
 func main() {
 	var headers headerFlag
 	var hash string
+	var progress bool
 	flag.Var(&headers, "header", "Header to include in the HTTP request. Can be specified multiple times.")
 	flag.StringVar(&hash, "hash", "", "Expected hash of the downloaded content with algorithm prefix (sha1,sha256,sha512,md5)")
+	flag.BoolVar(&progress, "progress", false, "Show download progress")
 	flag.Parse()
 
 	url := flag.Arg(0)
@@ -96,6 +125,7 @@ func main() {
 		os.Stdout,
 		dlpipe.WithHeaders(headerMap),
 		getHashOpt(hash),
+		getProgressOpt(progress),
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
