@@ -89,6 +89,7 @@ func (p *RetryParameters) Wait(ctx context.Context, currentPosition uint64) erro
 	// reset wait period if first read or we are making sufficient progress
 	if p.currentWait == 0 || (p.prevPos != 0 && currentPosition > p.prevPos+oneMB) {
 		p.currentWait = p.BaseWait
+		p.retryCtr = 0
 	}
 	p.prevPos = currentPosition
 	defer func() {
