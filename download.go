@@ -115,7 +115,7 @@ func DefaultRetryParameters() RetryParameters {
 
 type downloader struct {
 	// these fields are set once
-	url             string
+	urls            []string
 	writer          *datacounter.WriterCounter
 	httpClient      *http.Client
 	retryParameters RetryParameters
@@ -129,6 +129,7 @@ type downloader struct {
 
 	// these fields are updated at runtime
 	contentLength int64
+	urlsPosition  int
 }
 
 func (d *downloader) progressReportLoop(ctx context.Context) {
@@ -145,7 +146,7 @@ func (d *downloader) progressReportLoop(ctx context.Context) {
 }
 
 func (d *downloader) runInner(ctx context.Context) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.urls[d.urlsPosition], nil)
 	if err != nil {
 		return nil, NonRetryableWrapf("create request: %w", err)
 	}
@@ -176,7 +177,9 @@ func (d *downloader) runInner(ctx context.Context) (io.ReadCloser, error) {
 	}
 
 	if resp.StatusCode != http.StatusPartialContent {
-		return nil, NonRetryableWrapf("unexpected status code on subsequent read: %d", resp.StatusCode)
+		// this error should be retried since cloudflare r2 sometimes ignores the range request and
+		// returns 200
+		return nil, fmt.Errorf("unexpected status code on subsequent read: %d", resp.StatusCode)
 	}
 
 	// Validate we are receiving the right portion of partial content
@@ -212,15 +215,18 @@ func (d *downloader) run(ctx context.Context) error {
 	if d.progressFunc != nil {
 		go d.progressReportLoop(ctx)
 	}
-	for {
+	d.resetWriterPosition()
+
+	for d.urlsPosition < len(d.urls) {
 		body, err := d.runInner(ctx)
-		if err != nil {
-			return err
-		}
-		defer body.Close()
-		_, err = io.Copy(d.writer, body)
 		if err == nil {
-			break
+			defer body.Close()
+			_, err = io.Copy(d.writer, body)
+			if err == nil {
+				d.urlsPosition++
+				d.resetWriterPosition()
+				continue
+			}
 		}
 		err = d.retryParameters.Wait(ctx, d.writer.Count())
 		if err != nil {
@@ -236,9 +242,18 @@ func (d *downloader) run(ctx context.Context) error {
 	return nil
 }
 
+func (d *downloader) resetWriterPosition() {
+	d.writer = datacounter.NewWriterCounter(d.tmpWriter)
+	d.contentLength = 0
+}
+
 func DownloadURL(ctx context.Context, url string, writer io.Writer, opts ...DownloadOpt) error {
+	return DownloadURLMultipart(ctx, []string{url}, writer, opts...)
+}
+
+func DownloadURLMultipart(ctx context.Context, urls []string, writer io.Writer, opts ...DownloadOpt) error {
 	d := &downloader{
-		url:       url,
+		urls:      urls,
 		tmpWriter: writer,
 		httpClient: &http.Client{
 			Transport: &http.Transport{
@@ -254,6 +269,5 @@ func DownloadURL(ctx context.Context, url string, writer io.Writer, opts ...Down
 		}
 		opt(d)
 	}
-	d.writer = datacounter.NewWriterCounter(d.tmpWriter)
 	return d.run(ctx)
 }

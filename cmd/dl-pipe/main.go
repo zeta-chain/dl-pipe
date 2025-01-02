@@ -101,9 +101,9 @@ func main() {
 	flag.BoolVar(&progress, "progress", false, "Show download progress")
 	flag.Parse()
 
-	url := flag.Arg(0)
-	if url == "" {
-		fmt.Fprintf(os.Stderr, ("URL is required"))
+	urls := flag.Args()
+	if len(urls) == 0 {
+		fmt.Fprintf(os.Stderr, ("URL(s) are required"))
 		os.Exit(1)
 	}
 
@@ -119,9 +119,9 @@ func main() {
 		headerMap[parts[0]] = parts[1]
 	}
 
-	err := dlpipe.DownloadURL(
+	err := dlpipe.DownloadURLMultipart(
 		ctx,
-		url,
+		urls,
 		os.Stdout,
 		dlpipe.WithHeaders(headerMap),
 		getHashOpt(hash),

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -26,12 +27,12 @@ func TestUninterruptedDownload(t *testing.T) {
 	r := require.New(t)
 	ctx := context.Background()
 
-	serverURL, expectedHash, cleanup := serveInterruptedTestFile(t, fileSize, 0)
+	serverURLs, expectedHash, cleanup := serveInterruptedTestFiles(t, fileSize, 0, 1)
 	defer cleanup()
 
 	hasher := sha256.New()
 
-	err := DownloadURL(ctx, serverURL, io.Discard, WithExpectedHash(hasher, expectedHash))
+	err := DownloadURLMultipart(ctx, serverURLs, io.Discard, WithExpectedHash(hasher, expectedHash))
 	r.NoError(err)
 
 	givenHash := hasher.Sum(nil)
@@ -42,12 +43,12 @@ func TestUninterruptedMismatch(t *testing.T) {
 	r := require.New(t)
 	ctx := context.Background()
 
-	serverURL, _, cleanup := serveInterruptedTestFile(t, fileSize, 0)
+	serverURLs, _, cleanup := serveInterruptedTestFiles(t, fileSize, 0, 1)
 	defer cleanup()
 
 	hasher := sha256.New()
 
-	err := DownloadURL(ctx, serverURL, io.Discard, WithExpectedHash(hasher, []byte{}))
+	err := DownloadURLMultipart(ctx, serverURLs, io.Discard, WithExpectedHash(hasher, []byte{}))
 	r.Error(err)
 }
 
@@ -55,41 +56,78 @@ func TestInterruptedDownload(t *testing.T) {
 	r := require.New(t)
 	ctx := context.Background()
 
-	serverURL, expectedHash, cleanup := serveInterruptedTestFile(t, fileSize, interruptAt)
+	serverURLs, expectedHash, cleanup := serveInterruptedTestFiles(t, fileSize, interruptAt, 1)
 	defer cleanup()
 
 	hasher := sha256.New()
 
-	err := DownloadURL(ctx, serverURL, io.Discard, WithExpectedHash(hasher, expectedHash))
+	err := DownloadURLMultipart(ctx, serverURLs, io.Discard, WithExpectedHash(hasher, expectedHash))
+	r.NoError(err)
+}
+
+func TestDownloadMultipart(t *testing.T) {
+	r := require.New(t)
+	ctx := context.Background()
+
+	serverURLs, expectedHash, cleanup := serveInterruptedTestFiles(t, fileSize, 0, 10)
+	defer cleanup()
+
+	hasher := sha256.New()
+
+	err := DownloadURLMultipart(ctx, serverURLs, io.Discard, WithExpectedHash(hasher, expectedHash))
+	r.NoError(err)
+}
+
+func TestDownloadMultipartInterrupted(t *testing.T) {
+	r := require.New(t)
+	ctx := context.Background()
+
+	serverURLs, expectedHash, cleanup := serveInterruptedTestFiles(t, fileSize, interruptAt, 10)
+	defer cleanup()
+
+	hasher := sha256.New()
+
+	err := DownloadURLMultipart(ctx, serverURLs, io.Discard, WithExpectedHash(hasher, expectedHash))
 	r.NoError(err)
 }
 
 // derrived from https://github.com/vansante/go-dl-stream/blob/e29aef86498f37d3506126bc258193f1c913ea55/download_test.go#L166
-func serveInterruptedTestFile(t *testing.T, fileSize, interruptAt int64) (serverURL string, sha256Hash []byte, cleanup func()) {
-	rndFile, err := os.CreateTemp(os.TempDir(), "random_file_*.rnd")
-	assert.NoError(t, err)
-	filePath := rndFile.Name()
-
-	hasher := sha256.New()
-	_, err = io.Copy(io.MultiWriter(hasher, rndFile), io.LimitReader(rand.Reader, fileSize))
-	assert.NoError(t, err)
-	assert.NoError(t, rndFile.Close())
-
+func serveInterruptedTestFiles(t *testing.T, fileSize, interruptAt int64, parts int) ([]string, []byte, func()) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
-		log.Printf("Serving random interrupted file (size: %d, interuptAt: %d), Range: %s", fileSize, interruptAt, request.Header.Get(rangeHeader))
-
-		http.ServeFile(&interruptibleHTTPWriter{
-			ResponseWriter: writer,
-			writer:         writer,
-			interruptAt:    interruptAt,
-		}, request, filePath)
-
-	})
 	server := httptest.NewServer(mux)
+	hasher := sha256.New()
+	filePaths := []string{}
+	urls := []string{}
 
-	return server.URL, hasher.Sum(nil), func() {
-		_ = os.Remove(filePath)
+	for i := 0; i < parts; i++ {
+		rndFile, err := os.CreateTemp(os.TempDir(), "random_file_*.rnd")
+		assert.NoError(t, err)
+		filePath := rndFile.Name()
+		filePaths = append(filePaths, filePath)
+		filePathBase := filepath.Base(filePath)
+
+		_, err = io.Copy(io.MultiWriter(hasher, rndFile), io.LimitReader(rand.Reader, fileSize))
+		assert.NoError(t, err)
+		assert.NoError(t, rndFile.Close())
+
+		mux.HandleFunc(filePath, func(writer http.ResponseWriter, request *http.Request) {
+			log.Printf("Serving random interrupted file %s (size: %d, interuptAt: %d), Range: %s", filePathBase, fileSize, interruptAt, request.Header.Get(rangeHeader))
+
+			http.ServeFile(&interruptibleHTTPWriter{
+				ResponseWriter: writer,
+				writer:         writer,
+				interruptAt:    interruptAt,
+			}, request, filePath)
+
+		})
+		urls = append(urls, server.URL+filePath)
+
+	}
+
+	return urls, hasher.Sum(nil), func() {
+		for _, path := range filePaths {
+			_ = os.Remove(path)
+		}
 	}
 }
 
