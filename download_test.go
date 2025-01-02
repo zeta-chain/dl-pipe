@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -89,6 +90,11 @@ func TestDownloadMultipartInterrupted(t *testing.T) {
 
 	err := DownloadURLMultipart(ctx, serverURLs, io.Discard, WithExpectedHash(hasher, expectedHash))
 	r.NoError(err)
+}
+
+func TestErrNonRetryable(t *testing.T) {
+	err := NonRetryableWrapf("test")
+	require.True(t, errors.Is(err, ErrNonRetryable{}))
 }
 
 // derrived from https://github.com/vansante/go-dl-stream/blob/e29aef86498f37d3506126bc258193f1c913ea55/download_test.go#L166

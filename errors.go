@@ -28,6 +28,11 @@ func (e ErrNonRetryable) Unwrap() error {
 	return e.inner
 }
 
+func (e ErrNonRetryable) Is(target error) bool {
+	_, ok := target.(ErrNonRetryable)
+	return ok
+}
+
 func NonRetryableWrap(err error) error {
 	return ErrNonRetryable{inner: err}
 }

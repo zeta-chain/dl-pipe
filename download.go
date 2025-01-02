@@ -3,6 +3,7 @@ package dlpipe
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -227,6 +228,9 @@ func (d *downloader) run(ctx context.Context) error {
 				d.resetWriterPosition()
 				continue
 			}
+		}
+		if errors.Is(err, ErrNonRetryable{}) {
+			return err
 		}
 		err = d.retryParameters.Wait(ctx, d.writer.Count())
 		if err != nil {
