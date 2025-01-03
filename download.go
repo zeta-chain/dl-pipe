@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miolini/datacounter"
@@ -58,7 +59,7 @@ func WithHeaders(headers map[string]string) DownloadOpt {
 	}
 }
 
-type ProgressFunc func(currentLength uint64, totalLength uint64)
+type ProgressFunc func(currentLength, totalLength uint64, currentPart, totalParts int)
 
 func WithProgressFunc(progressFunc ProgressFunc, interval time.Duration) DownloadOpt {
 	return func(d *downloader) {
@@ -131,6 +132,8 @@ type downloader struct {
 	// these fields are updated at runtime
 	contentLength int64
 	urlsPosition  int
+
+	sync.RWMutex
 }
 
 func (d *downloader) progressReportLoop(ctx context.Context) {
@@ -139,7 +142,9 @@ func (d *downloader) progressReportLoop(ctx context.Context) {
 	for {
 		select {
 		case <-t.C:
-			d.progressFunc(d.writer.Count(), uint64(d.contentLength))
+			d.RLock()
+			d.progressFunc(d.writer.Count(), uint64(d.contentLength), d.urlsPosition, d.totalPartCount())
+			d.RUnlock()
 		case <-ctx.Done():
 			return
 		}
@@ -147,7 +152,9 @@ func (d *downloader) progressReportLoop(ctx context.Context) {
 }
 
 func (d *downloader) runInner(ctx context.Context) (io.ReadCloser, error) {
+	d.RLock()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.urls[d.urlsPosition], nil)
+	d.RUnlock()
 	if err != nil {
 		return nil, NonRetryableWrapf("create request: %w", err)
 	}
@@ -218,14 +225,16 @@ func (d *downloader) run(ctx context.Context) error {
 	}
 	d.resetWriterPosition()
 
-	for d.urlsPosition < len(d.urls) {
+	for d.urlsPosition < d.totalPartCount() {
 		body, err := d.runInner(ctx)
 		if err == nil {
 			defer body.Close()
 			_, err = io.Copy(d.writer, body)
 			if err == nil {
+				d.Lock()
 				d.urlsPosition++
 				d.resetWriterPosition()
+				d.Unlock()
 				continue
 			}
 		}
@@ -249,6 +258,10 @@ func (d *downloader) run(ctx context.Context) error {
 func (d *downloader) resetWriterPosition() {
 	d.writer = datacounter.NewWriterCounter(d.tmpWriter)
 	d.contentLength = 0
+}
+
+func (d *downloader) totalPartCount() int {
+	return len(d.urls)
 }
 
 func DownloadURL(ctx context.Context, url string, writer io.Writer, opts ...DownloadOpt) error {

@@ -71,7 +71,7 @@ const progressFuncInterval = time.Second * 10
 
 func getProgressFunc() dlpipe.ProgressFunc {
 	prevLength := uint64(0)
-	return func(currentLength uint64, totalLength uint64) {
+	return func(currentLength uint64, totalLength uint64, currentPart int, totalParts int) {
 		currentLengthStr := humanize.Bytes(currentLength)
 		totalLengthStr := humanize.Bytes(totalLength)
 
@@ -81,7 +81,12 @@ func getProgressFunc() dlpipe.ProgressFunc {
 
 		percent := float64(currentLength) / float64(totalLength) * 100
 
-		fmt.Fprintf(os.Stderr, "Downloaded %s of %s (%.1f%%) at %s/s\n", currentLengthStr, totalLengthStr, percent, rateStr)
+		partStr := ""
+		if totalParts > 1 {
+			partStr = fmt.Sprintf(" (part %d of %d)", currentPart+1, totalParts)
+		}
+
+		fmt.Fprintf(os.Stderr, "Downloaded %s of %s (%.1f%%) at %s/s%s\n", currentLengthStr, totalLengthStr, percent, rateStr, partStr)
 	}
 }
 
