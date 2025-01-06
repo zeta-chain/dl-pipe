@@ -71,7 +71,7 @@ const progressFuncInterval = time.Second * 10
 
 func getProgressFunc() dlpipe.ProgressFunc {
 	prevLength := uint64(0)
-	return func(currentLength uint64, totalLength uint64) {
+	return func(currentLength uint64, totalLength uint64, currentPart int, totalParts int) {
 		currentLengthStr := humanize.Bytes(currentLength)
 		totalLengthStr := humanize.Bytes(totalLength)
 
@@ -81,7 +81,12 @@ func getProgressFunc() dlpipe.ProgressFunc {
 
 		percent := float64(currentLength) / float64(totalLength) * 100
 
-		fmt.Fprintf(os.Stderr, "Downloaded %s of %s (%.1f%%) at %s/s\n", currentLengthStr, totalLengthStr, percent, rateStr)
+		partStr := ""
+		if totalParts > 1 {
+			partStr = fmt.Sprintf(" (part %d of %d)", currentPart+1, totalParts)
+		}
+
+		fmt.Fprintf(os.Stderr, "Downloaded %s of %s (%.1f%%) at %s/s%s\n", currentLengthStr, totalLengthStr, percent, rateStr, partStr)
 	}
 }
 
@@ -101,9 +106,9 @@ func main() {
 	flag.BoolVar(&progress, "progress", false, "Show download progress")
 	flag.Parse()
 
-	url := flag.Arg(0)
-	if url == "" {
-		fmt.Fprintf(os.Stderr, ("URL is required"))
+	urls := flag.Args()
+	if len(urls) == 0 {
+		fmt.Fprintf(os.Stderr, ("URL(s) are required"))
 		os.Exit(1)
 	}
 
@@ -119,9 +124,9 @@ func main() {
 		headerMap[parts[0]] = parts[1]
 	}
 
-	err := dlpipe.DownloadURL(
+	err := dlpipe.DownloadURLMultipart(
 		ctx,
-		url,
+		urls,
 		os.Stdout,
 		dlpipe.WithHeaders(headerMap),
 		getHashOpt(hash),
